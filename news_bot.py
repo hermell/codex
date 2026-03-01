@@ -15,6 +15,7 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from google import genai
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -230,10 +231,6 @@ class NewsSummarizer:
         return self._fallback_summarize(text)
 
     def _summarize_with_gemini(self, text: str) -> Optional[str]:
-        endpoint = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-            f"?key={self.api_key}"
-        )
         context_prompt = (
             "[Context]\n"
             "당신은 한국어 뉴스 브리핑 에디터입니다.\n"
@@ -247,26 +244,20 @@ class NewsSummarizer:
             "[Article]\n"
             f"{text[:6000]}"
         )
-        payload = {
-            "contents": [{"parts": [{"text": context_prompt}]}],
-            "generationConfig": {"temperature": 0.2, "topP": 0.9, "maxOutputTokens": 220},
-        }
 
         try:
-            resp = requests.post(endpoint, json=payload, timeout=self.request_timeout)
-            resp.raise_for_status()
-            data = resp.json()
-        except (requests.RequestException, ValueError) as exc:
+            client = genai.Client(api_key=self.api_key)
+            response = client.models.generate_content(
+                model=self.model,
+                contents=context_prompt,
+            )
+            text_out = (response.text or "").strip()
+        except Exception as exc:
             logger.warning("Gemini API 호출 실패: %s", exc)
             return None
 
-        try:
-            text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except (KeyError, IndexError, TypeError):
-            logger.warning("Gemini 응답 파싱 실패")
-            return None
-
         if not text_out:
+            logger.warning("Gemini 응답 파싱 실패")
             return None
         return text_out
 

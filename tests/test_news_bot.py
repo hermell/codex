@@ -7,14 +7,13 @@ from news_bot import NewsItem, NewsSummarizer, TelegramNotifier, load_config
 
 
 class TestNewsSummarizer(unittest.TestCase):
-    @patch("news_bot.requests.post")
-    def test_summarize_uses_gemini_with_context_prompt(self, mock_post):
+    @patch("news_bot.genai.Client")
+    def test_summarize_uses_gemini_with_context_prompt(self, mock_client_cls):
+        mock_client = Mock()
         mock_response = Mock()
-        mock_response.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": "핵심 요약 문장 1. 핵심 요약 문장 2."}]}}]
-        }
-        mock_response.raise_for_status.return_value = None
-        mock_post.return_value = mock_response
+        mock_response.text = "핵심 요약 문장 1. 핵심 요약 문장 2."
+        mock_client.models.generate_content.return_value = mock_response
+        mock_client_cls.return_value = mock_client
 
         summarizer = NewsSummarizer(
             sentence_count=2,
@@ -25,10 +24,11 @@ class TestNewsSummarizer(unittest.TestCase):
         summary = summarizer.summarize("테스트 기사 본문입니다. 중요한 정보가 있습니다.")
 
         self.assertIn("핵심 요약", summary)
-        _, kwargs = mock_post.call_args
-        prompt = kwargs["json"]["contents"][0]["parts"][0]["text"]
+        _, kwargs = mock_client.models.generate_content.call_args
+        prompt = kwargs["contents"]
         self.assertIn("[Context]", prompt)
         self.assertIn("2~3문장", prompt)
+        self.assertEqual(kwargs["model"], "gemini-1.5-flash")
 
 
 class TestTelegramChunk(unittest.TestCase):
