@@ -72,6 +72,17 @@ curl -X POST http://localhost:8000/news/run
 curl http://localhost:8000/news/health
 ```
 
+### 4) Swagger에서 API 테스트
+
+- 브라우저에서 `http://localhost:8000/docs` 접속
+- `POST /news/run` 또는 `GET /news/health`를 펼친 뒤 `Try it out` → `Execute`
+
+### 5) 간단한 index 테스트 페이지
+
+- 브라우저에서 `http://localhost:8000/` 접속
+- 화면 버튼으로 헬스체크/수동 실행 테스트
+- 같은 화면에서 Swagger 링크(`/docs`)로 이동 가능
+
 ## 참고
 
 - 서버가 켜져 있는 동안 백그라운드에서 1시간마다 자동 실행됩니다.
