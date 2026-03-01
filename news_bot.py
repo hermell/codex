@@ -9,12 +9,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Iterable, List, Optional, Sequence
 
 import feedparser
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from google import genai
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -59,6 +60,8 @@ class Config:
     timezone_name: str
     min_content_length: int
     state_file: str
+    gemini_api_key: str
+    gemini_model: str
 
 
 @dataclass
@@ -210,13 +213,55 @@ class NewsCollector:
 
 
 class NewsSummarizer:
-    def __init__(self, sentence_count: int):
+    def __init__(self, sentence_count: int, api_key: str, model: str, request_timeout: int):
         self.sentence_count = sentence_count
+        self.api_key = api_key
+        self.model = model
+        self.request_timeout = request_timeout
 
     def summarize(self, text: str) -> str:
         if not text:
             return "요약할 본문이 없어 제목/원문 확인이 필요합니다."
 
+        gemini_summary = self._summarize_with_gemini(text)
+        if gemini_summary:
+            return gemini_summary
+
+        logger.warning("Gemini 요약 실패로 fallback 요약을 사용합니다.")
+        return self._fallback_summarize(text)
+
+    def _summarize_with_gemini(self, text: str) -> Optional[str]:
+        context_prompt = (
+            "[Context]\n"
+            "당신은 한국어 뉴스 브리핑 에디터입니다.\n"
+            "독자가 핵심을 빠르게 파악할 수 있게 2~3문장으로 요약하세요.\n"
+            "추측/과장 없이 기사에 있는 사실만 전달하고, 문장 의미가 명확해야 합니다.\n\n"
+            "[Output Rules]\n"
+            "- 한국어 2~3문장\n"
+            "- 중복/군더더기 표현 금지\n"
+            "- 인물/기업/수치/사건 등 핵심 정보 포함\n"
+            "- 불릿/번호 없이 평문으로 작성\n\n"
+            "[Article]\n"
+            f"{text[:6000]}"
+        )
+
+        try:
+            client = genai.Client(api_key=self.api_key)
+            response = client.models.generate_content(
+                model=self.model,
+                contents=context_prompt,
+            )
+            text_out = (response.text or "").strip()
+        except Exception as exc:
+            logger.warning("Gemini API 호출 실패: %s", exc)
+            return None
+
+        if not text_out:
+            logger.warning("Gemini 응답 파싱 실패")
+            return None
+        return text_out
+
+    def _fallback_summarize(self, text: str) -> str:
         sentences = self._split_sentences(text)
         if not sentences:
             trimmed = text[:200]
@@ -225,38 +270,12 @@ class NewsSummarizer:
         if len(sentences) <= self.sentence_count:
             return " ".join(sentences)
 
-        word_scores = self._word_frequency(text)
-        ranked = sorted(
-            ((self._sentence_score(sentence, word_scores), sentence) for sentence in sentences),
-            key=lambda item: item[0],
-            reverse=True,
-        )
-        selected = {sentence for _, sentence in ranked[: self.sentence_count]}
-        ordered = [sentence for sentence in sentences if sentence in selected]
-        return " ".join(ordered)
+        return " ".join(sentences[: self.sentence_count])
 
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
         chunks = re.split(r"(?<=[.!?다])\s+", text)
         return [chunk.strip() for chunk in chunks if len(chunk.strip()) > 25]
-
-    @staticmethod
-    def _word_frequency(text: str) -> Dict[str, int]:
-        words = re.findall(r"[가-힣A-Za-z]{2,}", text.lower())
-        freq: Dict[str, int] = {}
-        for word in words:
-            if word in STOPWORDS:
-                continue
-            freq[word] = freq.get(word, 0) + 1
-        return freq
-
-    @staticmethod
-    def _sentence_score(sentence: str, freq_map: Dict[str, int]) -> float:
-        words = re.findall(r"[가-힣A-Za-z]{2,}", sentence.lower())
-        if not words:
-            return 0.0
-        score = sum(freq_map.get(word, 0) for word in words)
-        return score / len(words)
 
 
 class TelegramNotifier:
@@ -304,7 +323,12 @@ class DailyNewsBot:
         self.config = config
         self.state = RunState(config.state_file)
         self.collector = NewsCollector(config.request_timeout, config.min_content_length)
-        self.summarizer = NewsSummarizer(config.summary_sentences)
+        self.summarizer = NewsSummarizer(
+            sentence_count=config.summary_sentences,
+            api_key=config.gemini_api_key,
+            model=config.gemini_model,
+            request_timeout=config.request_timeout,
+        )
         self.notifier = TelegramNotifier(config.telegram_bot_token, config.telegram_chat_id, config.request_timeout)
 
     def run_once(self) -> None:
@@ -360,13 +384,12 @@ class DailyNewsBot:
             published = item.published.astimezone(DEFAULT_KST).strftime("%H:%M")
             source = html.escape(item.source)
             title = html.escape(item.title)
-            link = html.escape(item.link)
+            link = html.escape(item.link, quote=True)
 
             parts.append(
-                f"\n<b>{idx}. [{source}] {title}</b>\n"
+                f"\n<b>{idx}. [{source}]</b> <a href=\"{link}\">{title}</a>\n"
                 f"- 시각: {published}\n"
-                f"- 요약: {html.escape(summary)}\n"
-                f"- 링크: {link}"
+                f"- 요약: {html.escape(summary)}"
             )
 
         parts.append("\n#자동브리핑 #뉴스요약")
@@ -379,9 +402,11 @@ def load_config() -> Config:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     feed_str = os.getenv("RSS_FEEDS", "").strip()
+    gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
 
-    if not token or not chat_id or not feed_str:
-        raise ValueError("필수 환경변수(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, RSS_FEEDS)를 설정하세요.")
+    if not token or not chat_id or not feed_str or not gemini_api_key:
+        raise ValueError("필수 환경변수(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, RSS_FEEDS, GEMINI_API_KEY)를 설정하세요.")
 
     feeds = [feed.strip() for feed in feed_str.split(",") if feed.strip()]
     send_hour = int(os.getenv("SEND_HOUR", "7"))
@@ -402,6 +427,8 @@ def load_config() -> Config:
         timezone_name=os.getenv("TIMEZONE", "Asia/Seoul"),
         min_content_length=int(os.getenv("MIN_CONTENT_LENGTH", "120")),
         state_file=os.getenv("STATE_FILE", ".data/news_state.json"),
+        gemini_api_key=gemini_api_key,
+        gemini_model=gemini_model,
     )
 
 
