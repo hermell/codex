@@ -360,13 +360,12 @@ class DailyNewsBot:
             published = item.published.astimezone(DEFAULT_KST).strftime("%H:%M")
             source = html.escape(item.source)
             title = html.escape(item.title)
-            link = html.escape(item.link)
+            link = html.escape(item.link, quote=True)
 
             parts.append(
-                f"\n<b>{idx}. [{source}] {title}</b>\n"
+                f"\n<b>{idx}. [{source}]</b> <a href=\"{link}\">{title}</a>\n"
                 f"- 시각: {published}\n"
-                f"- 요약: {html.escape(summary)}\n"
-                f"- 링크: {link}"
+                f"- 요약: {html.escape(summary)}"
             )
 
         parts.append("\n#자동브리핑 #뉴스요약")

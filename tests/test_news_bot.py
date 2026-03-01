@@ -59,5 +59,38 @@ class TestMessageBuild(unittest.TestCase):
         self.assertEqual(item.source, "테스트")
 
 
+    def test_build_message_uses_anchor_title_without_raw_url(self):
+        from news_bot import Config, DailyNewsBot
+
+        config = Config(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            rss_feeds=["https://example.com/rss"],
+            send_hour=7,
+            send_minute=30,
+            top_n=1,
+            summary_sentences=2,
+            request_timeout=5,
+            timezone_name="Asia/Seoul",
+            min_content_length=120,
+            state_file=".data/test_state.json",
+        )
+        bot = DailyNewsBot(config)
+        bot.summarizer.summarize = lambda _content: "요약 문장"
+
+        item = NewsItem(
+            title="링크 테스트",
+            link="https://example.com/a?b=1&c=2",
+            source="테스트소스",
+            published=datetime.now(timezone.utc),
+            content="본문" * 80,
+        )
+
+        message = bot._build_message([item])
+
+        self.assertIn('<a href="https://example.com/a?b=1&amp;c=2">링크 테스트</a>', message)
+        self.assertNotIn('- 링크:', message)
+
+
 if __name__ == "__main__":
     unittest.main()
