@@ -58,7 +58,7 @@ cp .env.example .env
 python news_bot.py --once
 ```
 
-### 2) 데몬 실행
+### 2) 데몬 실행 
 
 ```bash
 python news_bot.py
