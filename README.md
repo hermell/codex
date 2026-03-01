@@ -48,7 +48,9 @@ cp .env.example .env
 - `TELEGRAM_CHAT_ID`: 수신 채팅 ID
 - `RSS_FEEDS`: 콤마로 구분된 RSS 목록
 - `TOP_N`: 전송 기사 수
-- `SUMMARY_SENTENCES`: 요약 문장 수
+- `SUMMARY_SENTENCES`: fallback 요약 문장 수(Gemini 실패 시 사용)
+- `GEMINI_API_KEY`: Google Gemini API 키 (필수)
+- `GEMINI_MODEL`: Gemini 모델명 (기본값: `gemini-1.5-flash`)
 - `MIN_CONTENT_LENGTH`: 본문 최소 길이(짧으면 summary fallback)
 - `STATE_FILE`: 중복 전송 방지 상태 파일 위치
 

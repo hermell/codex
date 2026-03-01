@@ -1,22 +1,34 @@
 import os
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import Mock, patch
 
 from news_bot import NewsItem, NewsSummarizer, TelegramNotifier, load_config
 
 
 class TestNewsSummarizer(unittest.TestCase):
-    def test_summarize_returns_top_sentences(self):
-        text = (
-            "AI 시장이 빠르게 성장하고 있다. "
-            "기업들은 AI 인프라 투자 경쟁을 이어가고 있다. "
-            "주식 시장은 오늘 보합세를 보였다. "
-            "AI 기술 인력 확보가 핵심 과제로 떠올랐다."
+    @patch("news_bot.requests.post")
+    def test_summarize_uses_gemini_with_context_prompt(self, mock_post):
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "핵심 요약 문장 1. 핵심 요약 문장 2."}]}}]
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+
+        summarizer = NewsSummarizer(
+            sentence_count=2,
+            api_key="gemini-key",
+            model="gemini-1.5-flash",
+            request_timeout=5,
         )
-        summarizer = NewsSummarizer(sentence_count=2)
-        summary = summarizer.summarize(text)
-        self.assertIn("AI", summary)
-        self.assertGreater(len(summary), 20)
+        summary = summarizer.summarize("테스트 기사 본문입니다. 중요한 정보가 있습니다.")
+
+        self.assertIn("핵심 요약", summary)
+        _, kwargs = mock_post.call_args
+        prompt = kwargs["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("[Context]", prompt)
+        self.assertIn("2~3문장", prompt)
 
 
 class TestTelegramChunk(unittest.TestCase):
@@ -40,11 +52,13 @@ class TestConfigLoad(unittest.TestCase):
         os.environ["TELEGRAM_BOT_TOKEN"] = "token"
         os.environ["TELEGRAM_CHAT_ID"] = "chat"
         os.environ["RSS_FEEDS"] = "https://a.com/rss,https://b.com/rss"
+        os.environ["GEMINI_API_KEY"] = "gemini-key"
         os.environ["SEND_HOUR"] = "8"
         os.environ["SEND_MINUTE"] = "10"
         config = load_config()
         self.assertEqual(config.send_hour, 8)
         self.assertEqual(len(config.rss_feeds), 2)
+        self.assertEqual(config.gemini_api_key, "gemini-key")
 
 
 class TestMessageBuild(unittest.TestCase):
@@ -57,7 +71,6 @@ class TestMessageBuild(unittest.TestCase):
             content="긴 기사 본문입니다. " * 30,
         )
         self.assertEqual(item.source, "테스트")
-
 
     def test_build_message_uses_anchor_title_without_raw_url(self):
         from news_bot import Config, DailyNewsBot
@@ -74,6 +87,8 @@ class TestMessageBuild(unittest.TestCase):
             timezone_name="Asia/Seoul",
             min_content_length=120,
             state_file=".data/test_state.json",
+            gemini_api_key="gemini-key",
+            gemini_model="gemini-1.5-flash",
         )
         bot = DailyNewsBot(config)
         bot.summarizer.summarize = lambda _content: "요약 문장"
